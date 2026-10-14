@@ -1,4 +1,4 @@
-import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -14,6 +14,7 @@ import {
   CircleHelp,
   Clock3,
   Compass,
+  ImagePlus,
   Mail,
   MapPin,
   Plus,
@@ -42,12 +43,68 @@ interface Report {
   location: string;
   date: string;
   contact: string;
+  photoDataUrl?: string;
   status: ReportStatus;
   createdAt: string;
 }
 
 const STORAGE_KEY = 'campus-lost-found-reports-v1';
 const categories = ['Accessories', 'Bags', 'Books & notes', 'Clothing', 'Electronics', 'Keys & cards', 'Other'];
+
+async function compressPhoto(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  const maxDimension = 960;
+  const scale = Math.min(1, maxDimension / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    bitmap.close();
+    throw new Error('Could not prepare the photo.');
+  }
+
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+
+  const canvasToJpeg = (source: HTMLCanvasElement, quality: number) =>
+    new Promise<Blob>((resolve, reject) => {
+      source.toBlob(
+        (blob) => blob ? resolve(blob) : reject(new Error('Could not encode the photo.')),
+        'image/jpeg',
+        quality,
+      );
+    });
+
+  let blob = await canvasToJpeg(canvas, 0.72);
+
+  if (blob.size > 320 * 1024) {
+    const smallerCanvas = document.createElement('canvas');
+    const smallerScale = Math.min(1, 720 / Math.max(canvas.width, canvas.height));
+    smallerCanvas.width = Math.max(1, Math.round(canvas.width * smallerScale));
+    smallerCanvas.height = Math.max(1, Math.round(canvas.height * smallerScale));
+    const smallerContext = smallerCanvas.getContext('2d');
+    if (!smallerContext) throw new Error('Could not resize the photo.');
+    smallerContext.fillStyle = '#fff';
+    smallerContext.fillRect(0, 0, smallerCanvas.width, smallerCanvas.height);
+    smallerContext.drawImage(canvas, 0, 0, smallerCanvas.width, smallerCanvas.height);
+    blob = await canvasToJpeg(smallerCanvas, 0.58);
+  }
+
+  if (blob.size > 320 * 1024) throw new Error('The photo is too large to save in this browser.');
+
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === 'string'
+      ? resolve(reader.result)
+      : reject(new Error('Could not read the photo.'));
+    reader.onerror = () => reject(new Error('Could not read the photo.'));
+    reader.readAsDataURL(blob);
+  });
+}
 
 function dateOffset(daysAgo: number) {
   const date = new Date();
@@ -170,12 +227,14 @@ function Home() {
   const [draftKind, setDraftKind] = useState<ReportKind>('lost');
   const [draftCategory, setDraftCategory] = useState('Accessories');
   const [draftDate, setDraftDate] = useState(dateOffset(0));
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [isPhotoProcessing, setIsPhotoProcessing] = useState(false);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(reports));
     } catch {
-      // Keep the current session usable if this browser blocks local storage.
+      setToast('Browser storage is full or unavailable. Recent changes may not remain after refresh.');
     }
   }, [reports]);
 
@@ -217,11 +276,42 @@ function Home() {
     setDraftKind('lost');
     setDraftCategory('Accessories');
     setDraftDate(dateOffset(0));
+    setPhotoDataUrl(null);
     setIsFormOpen(true);
+  }
+
+  async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setToast('Choose a JPG, PNG, or WebP photo.');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setToast('Choose a photo smaller than 10 MB.');
+      return;
+    }
+
+    setIsPhotoProcessing(true);
+    try {
+      setPhotoDataUrl(await compressPhoto(file));
+      setToast('Photo added to your report.');
+    } catch {
+      setToast('Could not prepare that photo. Try a smaller JPG, PNG, or WebP image.');
+    } finally {
+      setIsPhotoProcessing(false);
+    }
   }
 
   function createReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isPhotoProcessing) {
+      setToast('Please wait while your photo is being prepared.');
+      return;
+    }
     const form = new FormData(event.currentTarget);
     const report: Report = {
       id: `report-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -232,11 +322,13 @@ function Home() {
       location: String(form.get('location')).trim(),
       date: draftDate,
       contact: String(form.get('contact')).trim(),
+      photoDataUrl: photoDataUrl ?? undefined,
       status: 'open',
       createdAt: new Date().toISOString(),
     };
     setReports((current) => [report, ...current]);
     setIsFormOpen(false);
+    setPhotoDataUrl(null);
     setKindFilter('all');
     setStatusFilter('open');
     setCategoryFilter('all');
@@ -339,6 +431,7 @@ function Home() {
           <div className="reports-grid" data-testid="list-reports">
             {filteredReports.length ? filteredReports.map((report, index) => (
               <article className="report-card" key={report.id} style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }} data-testid={`card-report-${report.id}`}>
+                {report.photoDataUrl && <img className="report-photo" src={report.photoDataUrl} alt={report.itemName} data-testid={`img-report-${report.id}`} />}
                 <div className="card-top">
                   <span className={`kind-chip ${report.kind}`}>{report.kind === 'lost' ? 'Lost item' : 'Found item'}</span>
                   <span className={`status-small${report.status === 'reunited' ? ' reunited' : ''}`} data-testid={`status-report-${report.id}`}>{report.status === 'reunited' ? 'Reunited' : 'Open'}</span>
@@ -423,13 +516,35 @@ function Home() {
                   <input id="report-date" type="date" value={draftDate} onChange={(event) => setDraftDate(event.target.value)} required data-testid="input-report-date" />
                 </div>
                 <div className="field wide">
+                  <label className="photo-label" htmlFor="report-photo"><ImagePlus size={14} /> Add a photo <span>(optional)</span></label>
+                  <input
+                    id="report-photo"
+                    className="photo-input"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handlePhotoChange}
+                    disabled={isPhotoProcessing}
+                    data-testid="input-report-photo"
+                  />
+                  <p className="photo-hint">JPG, PNG, or WebP · up to 10 MB · resized for this browser</p>
+                  {isPhotoProcessing && <p className="photo-processing" role="status" data-testid="status-photo-processing">Preparing photo…</p>}
+                  {photoDataUrl && (
+                    <div className="photo-preview">
+                      <img src={photoDataUrl} alt="Preview of the selected item" data-testid="img-report-photo-preview" />
+                      <button type="button" className="photo-remove" onClick={() => setPhotoDataUrl(null)} data-testid="button-remove-report-photo">
+                        <X size={13} /> Remove photo
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="field wide">
                   <label htmlFor="report-contact">How can someone reach you?</label>
                   <input id="report-contact" name="contact" type="email" placeholder="Your email address" required maxLength={120} data-testid="input-report-contact" />
                 </div>
               </div>
               <div className="form-footer">
                 <span className="form-hint">Saved on this browser only.<br />Use a campus email if you can.</span>
-                <button className="button-primary" type="submit" data-testid="button-submit-report"><Plus size={15} /> Post report</button>
+                <button className="button-primary" type="submit" disabled={isPhotoProcessing} data-testid="button-submit-report"><Plus size={15} /> Post report</button>
               </div>
             </form>
           </section>
@@ -447,6 +562,7 @@ function Home() {
               </div>
               <button className="close-button" onClick={() => setSelectedReport(null)} aria-label="Close details" data-testid="button-close-details"><X size={17} /></button>
             </div>
+            {selectedReport.photoDataUrl && <img className="detail-photo" src={selectedReport.photoDataUrl} alt={`Photo of ${selectedReport.itemName}`} data-testid={`img-detail-${selectedReport.id}`} />}
             <p className="detail-body">{selectedReport.description}</p>
             <div className="detail-facts">
               <div className="detail-fact"><MapPin size={15} /><span><span className="fact-label">Campus spot</span><span className="fact-value">{selectedReport.location}</span></span></div>
