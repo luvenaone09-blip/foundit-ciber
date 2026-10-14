@@ -1,9 +1,11 @@
-import { type ChangeEvent, type FormEvent, type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type User } from '@supabase/supabase-js';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
+import { supabase } from '@/lib/supabase';
 import {
   ArrowRight,
   ArrowUpRight,
@@ -47,6 +49,8 @@ interface Report {
   date: string;
   contact: string;
   ownerId?: string;
+  photoPath?: string;
+  photoUrl?: string;
   photoDataUrl?: string;
   status: ReportStatus;
   createdAt: string;
@@ -54,6 +58,8 @@ interface Report {
 
 const STORAGE_KEY = 'campus-lost-found-reports-v1';
 const OWNER_STORAGE_KEY = 'foundit-browser-owner-v1';
+const MIGRATION_KEY = 'foundit-supabase-migration-v1';
+const PHOTO_BUCKET = 'foundit-report-photos';
 const categories = ['Accessories', 'Bags', 'Books & notes', 'Clothing', 'Electronics', 'Keys & cards', 'Other'];
 
 function getBrowserOwnerId() {
@@ -76,18 +82,121 @@ function isValidContact(value: string) {
 }
 
 function getContactLink(contact: string) {
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+  const normalizedContact = contact.trim();
+  if (!normalizedContact) return null;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedContact)) {
     return {
-      href: `mailto:${encodeURIComponent(contact)}`,
+      href: `mailto:${encodeURIComponent(normalizedContact)}`,
       label: 'Email poster',
       channel: 'email' as const,
     };
   }
   return {
-    href: `tel:${contact.replace(/[^\d+]/g, '')}`,
+    href: `tel:${normalizedContact.replace(/[^\d+]/g, '')}`,
     label: 'Call poster',
     channel: 'phone' as const,
   };
+}
+
+interface ReportRow {
+  id: string;
+  owner_id: string;
+  kind: ReportKind;
+  item_name: string;
+  category: string;
+  description: string;
+  location: string;
+  date: string;
+  contact: string;
+  photo_path: string | null;
+  status: ReportStatus;
+  created_at: string;
+}
+
+function reportFromRow(row: ReportRow, photoUrl?: string): Report {
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    kind: row.kind,
+    itemName: row.item_name,
+    category: row.category,
+    description: row.description,
+    location: row.location,
+    date: row.date,
+    contact: row.contact,
+    photoPath: row.photo_path ?? undefined,
+    photoUrl,
+    status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+function reportToRow(report: Report, ownerId: string, photoPath: string | null) {
+  return {
+    id: report.id,
+    owner_id: ownerId,
+    kind: report.kind,
+    item_name: report.itemName,
+    category: report.category,
+    description: report.description,
+    location: report.location,
+    date: report.date,
+    contact: report.contact,
+    photo_path: photoPath,
+    status: report.status,
+    created_at: report.createdAt,
+  };
+}
+
+function getLegacyReports(): Report[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    const browserOwnerId = getBrowserOwnerId();
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as Report[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((report) => (
+      typeof report.id === 'string' &&
+      report.id.startsWith('report-') &&
+      (!report.ownerId || report.ownerId === browserOwnerId)
+    ));
+  } catch {
+    return [];
+  }
+}
+
+async function uploadReportPhoto(dataUrl: string, path: string) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const { error } = await supabase.storage
+    .from(PHOTO_BUCKET)
+    .upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+  if (error) throw error;
+}
+
+async function migrateLegacyReports(userId: string) {
+  try {
+    if (localStorage.getItem(MIGRATION_KEY)) return;
+  } catch {
+    return;
+  }
+
+  for (const report of getLegacyReports()) {
+    let photoPath = report.photoPath ?? null;
+    if (report.photoDataUrl) {
+      photoPath = `${userId}/${report.id}/legacy.jpg`;
+      await uploadReportPhoto(report.photoDataUrl, photoPath);
+    }
+    const { error } = await supabase
+      .from('reports')
+      .upsert(reportToRow(report, userId, photoPath), { onConflict: 'id' });
+    if (error) throw error;
+  }
+
+  try {
+    localStorage.setItem(MIGRATION_KEY, 'done');
+  } catch {
+    // If storage is disabled, stable report IDs make a later retry safe.
+  }
 }
 
 async function compressPhoto(file: File): Promise<string> {
@@ -151,100 +260,6 @@ function dateOffset(daysAgo: number) {
   return date.toISOString().slice(0, 10);
 }
 
-const illustrativeReports: Report[] = [
-  {
-    id: 'seed-navy-tote',
-    kind: 'lost',
-    itemName: 'Navy canvas tote',
-    category: 'Bags',
-    description: 'A dark blue tote with a small stitched sunflower near the pocket. My studio sketchbook is inside.',
-    location: 'Ciber arts room 204',
-    date: dateOffset(0),
-    contact: 'elena.morris@example.edu',
-    status: 'open',
-    createdAt: new Date(Date.now() - 1000 * 60 * 34).toISOString(),
-  },
-  {
-    id: 'seed-silver-keys',
-    kind: 'found',
-    itemName: 'Set of silver keys',
-    category: 'Keys & cards',
-    description: 'Three keys on a green woven loop. Turned in at the front desk after my 10 a.m. lecture.',
-    location: 'Ciber library, front desk',
-    date: dateOffset(0),
-    contact: 'jonah.lee@example.edu',
-    status: 'open',
-    createdAt: new Date(Date.now() - 1000 * 60 * 83).toISOString(),
-  },
-  {
-    id: 'seed-earbuds',
-    kind: 'lost',
-    itemName: 'Wireless earbuds case',
-    category: 'Electronics',
-    description: 'White charging case with a tiny blue tape mark on the hinge. The earbuds are inside.',
-    location: 'Main courtyard, by the fountain',
-    date: dateOffset(1),
-    contact: 'riley.parker@example.edu',
-    status: 'open',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 7).toISOString(),
-  },
-  {
-    id: 'seed-red-scarf',
-    kind: 'found',
-    itemName: 'Rust-red knit scarf',
-    category: 'Clothing',
-    description: 'Soft hand-knit scarf left over a chair. Ask me for the small detail on one end to confirm it is yours.',
-    location: 'School café',
-    date: dateOffset(2),
-    contact: 'samira.ahmed@example.edu',
-    status: 'open',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 28).toISOString(),
-  },
-  {
-    id: 'seed-calculus-book',
-    kind: 'lost',
-    itemName: 'Calculus notebook',
-    category: 'Books & notes',
-    description: 'Green spiral notebook, lots of worked examples and a name written inside the front cover.',
-    location: 'Ciber science room B',
-    date: dateOffset(3),
-    contact: 'milo.kim@example.edu',
-    status: 'open',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 51).toISOString(),
-  },
-  {
-    id: 'seed-water-bottle',
-    kind: 'found',
-    itemName: 'Sage metal water bottle',
-    category: 'Other',
-    description: 'Insulated bottle with a few small stickers. It is safe with the student union welcome desk.',
-    location: 'Ciber front office',
-    date: dateOffset(4),
-    contact: 'avery.bell@example.edu',
-    status: 'open',
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString(),
-  },
-];
-
-function readReports(ownerId: string): Report[] {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved) as Report[];
-      if (Array.isArray(parsed)) {
-        return parsed.map((report) => (
-          report.id.startsWith('report-') && !report.ownerId
-            ? { ...report, ownerId }
-            : report
-        ));
-      }
-    }
-  } catch {
-    // If browser storage is unavailable, the bulletin still works for this visit.
-  }
-  return illustrativeReports;
-}
-
 function formatDate(value: string) {
   const date = new Date(`${value}T12:00:00`);
   if (Number.isNaN(date.getTime())) return value;
@@ -260,9 +275,16 @@ function formatRelative(value: string) {
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
 
-function Home() {
-  const [ownerId] = useState(getBrowserOwnerId);
-  const [reports, setReports] = useState<Report[]>(() => readReports(ownerId));
+function errorText(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return 'Unknown error';
+}
+
+function Home({ user }: { user: User }) {
+  const [reports, setReports] = useState<Report[]>([]);
   const [kindFilter, setKindFilter] = useState<'all' | ReportKind>('all');
   const [statusFilter, setStatusFilter] = useState<'open' | 'all' | 'reunited'>('open');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -275,15 +297,91 @@ function Home() {
   const [draftCategory, setDraftCategory] = useState('Accessories');
   const [draftDate, setDraftDate] = useState(dateOffset(0));
   const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [retainedPhotoPath, setRetainedPhotoPath] = useState<string | null>(null);
+  const [retainedPhotoUrl, setRetainedPhotoUrl] = useState<string | null>(null);
   const [isPhotoProcessing, setIsPhotoProcessing] = useState(false);
+  const [isSavingReport, setIsSavingReport] = useState(false);
+  const [isMutatingReport, setIsMutatingReport] = useState(false);
+  const [isLoadingReports, setIsLoadingReports] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+
+  const refreshReports = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('reports')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    let photoFailures = 0;
+    const refreshed = await Promise.all(((data ?? []) as ReportRow[]).map(async (row) => {
+      if (!row.photo_path) return reportFromRow(row);
+      const { data: signedPhoto, error: photoError } = await supabase
+        .storage
+        .from(PHOTO_BUCKET)
+        .createSignedUrl(row.photo_path, 60 * 60);
+      if (photoError) {
+        photoFailures += 1;
+        return reportFromRow(row);
+      }
+      return reportFromRow(row, signedPhoto.signedUrl);
+    }));
+
+    setReports(refreshed);
+    setSelectedReport((current) => current
+      ? refreshed.find((report) => report.id === current.id) ?? null
+      : null);
+    setLoadError('');
+    if (photoFailures) {
+      setToast(`${photoFailures} report photo${photoFailures === 1 ? '' : 's'} could not be loaded.`);
+    }
+  }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(reports));
-    } catch {
-      setToast('Browser storage is full or unavailable. Recent changes may not remain after refresh.');
-    }
-  }, [reports]);
+    let active = true;
+    const loadInitialReports = async () => {
+      setIsLoadingReports(true);
+      try {
+        await migrateLegacyReports(user.id);
+        await refreshReports();
+      } catch (error) {
+        if (active) setLoadError(`Could not load shared reports: ${errorText(error)}`);
+      } finally {
+        if (active) setIsLoadingReports(false);
+      }
+    };
+
+    void loadInitialReports();
+    const channel = supabase
+      .channel('foundit-reports')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' }, () => {
+        void refreshReports().catch((error) => {
+          if (active) setLoadError(`Live refresh failed: ${errorText(error)}`);
+        });
+      })
+      .subscribe((status) => {
+        if (!active) return;
+        setRealtimeStatus(status === 'SUBSCRIBED'
+          ? 'connected'
+          : status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED'
+            ? 'disconnected'
+            : 'connecting');
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setToast('Live updates are unavailable. Reports can still be refreshed.');
+        }
+      });
+    const photoRefreshTimer = window.setInterval(() => {
+      void refreshReports().catch((error) => {
+        if (active) setLoadError(`Report refresh failed: ${errorText(error)}`);
+      });
+    }, 50 * 60 * 1000);
+
+    return () => {
+      active = false;
+      window.clearInterval(photoRefreshTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [user.id, refreshReports]);
 
   useEffect(() => {
     if (!isFormOpen && !selectedReport) return;
@@ -326,16 +424,20 @@ function Home() {
     setDraftCategory('Accessories');
     setDraftDate(dateOffset(0));
     setPhotoDataUrl(null);
+    setRetainedPhotoPath(null);
+    setRetainedPhotoUrl(null);
     setIsFormOpen(true);
   }
 
   function openEditForm(report: Report) {
-    if (report.ownerId !== ownerId) return;
+    if (report.ownerId !== user.id) return;
     setEditingReport(report);
     setDraftKind(report.kind);
     setDraftCategory(report.category);
     setDraftDate(report.date);
     setPhotoDataUrl(report.photoDataUrl ?? null);
+    setRetainedPhotoPath(report.photoPath ?? null);
+    setRetainedPhotoUrl(report.photoUrl ?? null);
     setSelectedReport(null);
     setIsFormOpen(true);
   }
@@ -358,6 +460,8 @@ function Home() {
     setIsPhotoProcessing(true);
     try {
       setPhotoDataUrl(await compressPhoto(file));
+      setRetainedPhotoPath(null);
+      setRetainedPhotoUrl(null);
       setToast('Photo added to your report.');
     } catch {
       setToast('Could not prepare that photo. Try a smaller JPG, PNG, or WebP image.');
@@ -366,8 +470,9 @@ function Home() {
     }
   }
 
-  function saveReport(event: FormEvent<HTMLFormElement>) {
+  async function saveReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isSavingReport) return;
     if (isPhotoProcessing) {
       setToast('Please wait while your photo is being prepared.');
       return;
@@ -380,7 +485,7 @@ function Home() {
     }
     const existingReport = editingReport;
     const report: Report = {
-      id: existingReport?.id ?? `report-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: existingReport?.id ?? crypto.randomUUID(),
       kind: draftKind,
       itemName: String(form.get('itemName')).trim(),
       category: draftCategory,
@@ -388,40 +493,132 @@ function Home() {
       location: String(form.get('location')).trim(),
       date: draftDate,
       contact,
-      ownerId: existingReport?.ownerId ?? ownerId,
+      ownerId: user.id,
+      photoPath: retainedPhotoPath ?? undefined,
+      photoUrl: retainedPhotoUrl ?? undefined,
       photoDataUrl: photoDataUrl ?? undefined,
       status: existingReport?.status ?? 'open',
       createdAt: existingReport?.createdAt ?? new Date().toISOString(),
     };
-    setReports((current) => existingReport
-      ? current.map((entry) => entry.id === report.id ? report : entry)
-      : [report, ...current]);
-    setIsFormOpen(false);
-    setPhotoDataUrl(null);
-    setEditingReport(null);
-    setKindFilter('all');
-    setStatusFilter('open');
-    setCategoryFilter('all');
-    setQuery('');
-    setToast(existingReport ? 'Your report was updated.' : 'Your report is on this browser’s bulletin.');
+
+    setIsSavingReport(true);
+    let uploadedPhotoPath: string | null = null;
+    try {
+      let photoPathToSave = retainedPhotoPath;
+      if (photoDataUrl) {
+        uploadedPhotoPath = `${user.id}/${report.id}/${crypto.randomUUID()}.jpg`;
+        await uploadReportPhoto(photoDataUrl, uploadedPhotoPath);
+        photoPathToSave = uploadedPhotoPath;
+      }
+
+      const row = reportToRow(report, user.id, photoPathToSave);
+      const result = existingReport
+        ? await supabase.from('reports').update(row).eq('id', report.id).eq('owner_id', user.id).select('id').maybeSingle()
+        : await supabase.from('reports').insert(row).select('id').single();
+      if (result.error) throw result.error;
+      if (!result.data) throw new Error('This report no longer exists or is not yours to edit.');
+
+      let photoCleanupFailed = false;
+      if (existingReport?.photoPath && existingReport.photoPath !== photoPathToSave) {
+        const { error: cleanupError } = await supabase.storage
+          .from(PHOTO_BUCKET)
+          .remove([existingReport.photoPath]);
+        photoCleanupFailed = Boolean(cleanupError);
+      }
+
+      setIsFormOpen(false);
+      setPhotoDataUrl(null);
+      setRetainedPhotoPath(null);
+      setRetainedPhotoUrl(null);
+      setEditingReport(null);
+      setKindFilter('all');
+      setStatusFilter('open');
+      setCategoryFilter('all');
+      setQuery('');
+      try {
+        await refreshReports();
+        setToast(photoCleanupFailed
+          ? 'Report saved, but its previous photo could not be removed.'
+          : existingReport ? 'Your report was updated.' : 'Your report was shared with Ciber.');
+      } catch (error) {
+        setLoadError(`Report saved, but the list could not refresh: ${errorText(error)}`);
+      }
+    } catch (error) {
+      if (uploadedPhotoPath) {
+        await supabase.storage.from(PHOTO_BUCKET).remove([uploadedPhotoPath]);
+      }
+      setToast(`Could not save report: ${errorText(error)}`);
+    } finally {
+      setIsSavingReport(false);
+    }
   }
 
-  function updateStatus(report: Report) {
-    if (report.ownerId !== ownerId) return;
+  async function updateStatus(report: Report) {
+    if (report.ownerId !== user.id || isMutatingReport) return;
     const nextStatus: ReportStatus = report.status === 'open' ? 'reunited' : 'open';
-    const updated = { ...report, status: nextStatus };
-    setReports((current) => current.map((entry) => entry.id === report.id ? updated : entry));
-    setSelectedReport(updated);
-    setToast(nextStatus === 'reunited' ? 'Marked reunited. Thanks for closing the loop.' : 'Report moved back to open.');
+    setIsMutatingReport(true);
+    try {
+      const { data, error } = await supabase
+        .from('reports')
+        .update({ status: nextStatus })
+        .eq('id', report.id)
+        .eq('owner_id', user.id)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('This report no longer exists or is not yours to update.');
+      await refreshReports();
+      setToast(nextStatus === 'reunited' ? 'Marked reunited. Thanks for closing the loop.' : 'Report moved back to open.');
+    } catch (error) {
+      setToast(`Could not update report: ${errorText(error)}`);
+    } finally {
+      setIsMutatingReport(false);
+    }
   }
 
-  function deleteReport(report: Report) {
-    if (report.ownerId !== ownerId) return;
-    const confirmed = window.confirm(`Delete "${report.itemName}"? This will permanently remove it from this browser.`);
+  async function deleteReport(report: Report) {
+    if (report.ownerId !== user.id || isMutatingReport) return;
+    const confirmed = window.confirm(`Delete "${report.itemName}"? This will permanently remove it from the shared Ciber bulletin.`);
     if (!confirmed) return;
-    setReports((current) => current.filter((entry) => entry.id !== report.id));
-    setSelectedReport(null);
-    setToast('Your report was deleted.');
+    setIsMutatingReport(true);
+    try {
+      const { data, error } = await supabase
+        .from('reports')
+        .delete()
+        .eq('id', report.id)
+        .eq('owner_id', user.id)
+        .select('id')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error('This report no longer exists or is not yours to delete.');
+      let photoCleanupFailed = false;
+      if (report.photoPath) {
+        const { error: photoError } = await supabase.storage.from(PHOTO_BUCKET).remove([report.photoPath]);
+        photoCleanupFailed = Boolean(photoError);
+      }
+      setSelectedReport(null);
+      await refreshReports();
+      setToast(photoCleanupFailed
+        ? 'Report deleted, but its photo could not be removed.'
+        : 'Your report was deleted.');
+    } catch (error) {
+      setToast(`Could not delete report: ${errorText(error)}`);
+    } finally {
+      setIsMutatingReport(false);
+    }
+  }
+
+  async function retryLoadReports() {
+    setIsLoadingReports(true);
+    setLoadError('');
+    try {
+      await migrateLegacyReports(user.id);
+      await refreshReports();
+    } catch (error) {
+      setLoadError(`Could not load shared reports: ${errorText(error)}`);
+    } finally {
+      setIsLoadingReports(false);
+    }
   }
 
   return (
@@ -432,7 +629,12 @@ function Home() {
           <span><span className="brand-name">Foundit</span><span className="brand-sub">Ciber school lost &amp; found</span></span>
         </a>
         <div className="nav-right">
-          <span className="local-note"><ShieldCheck size={15} /> Reports stay on this browser</span>
+          <span className="local-note"><ShieldCheck size={15} /> {realtimeStatus === 'connected' ? 'Live reports synced' : realtimeStatus === 'connecting' ? 'Connecting to live reports…' : 'Live sync unavailable'}</span>
+          <span className="signed-in-email">{user.email}</span>
+          <button className="button-outline button-signout" onClick={async () => {
+            const { error } = await supabase.auth.signOut();
+            if (error) setToast(`Could not sign out: ${error.message}`);
+          }} data-testid="button-sign-out">Sign out</button>
           <button className="button-primary" onClick={openCreateForm} data-testid="button-create-report">
             <Plus size={16} /> Post a report
           </button>
@@ -459,7 +661,7 @@ function Home() {
             <div>
               <div className="eyebrow">Around Ciber</div>
               <h2 id="board-title">The latest reports</h2>
-              <p className="board-subtitle">Illustrative Ciber school reports · A little more detail can make all the difference.</p>
+              <p className="board-subtitle">Shared reports from Ciber students · A little more detail can make all the difference.</p>
             </div>
             <span className="report-count" data-testid="text-report-count">{openCount} open {openCount === 1 ? 'report' : 'reports'}</span>
           </div>
@@ -509,9 +711,20 @@ function Home() {
           </div>
 
           <div className="reports-grid" data-testid="list-reports">
-            {filteredReports.length ? filteredReports.map((report, index) => (
+            {loadError ? (
+              <div className="empty-state" role="alert" data-testid="error-load-reports">
+                <div className="empty-mark"><CircleHelp size={21} /></div>
+                <h3>Reports could not be loaded.</h3>
+                <p>{loadError}</p>
+                <button className="button-outline" onClick={() => void retryLoadReports()} data-testid="button-retry-reports">Try again</button>
+              </div>
+            ) : isLoadingReports ? (
+              <div className="empty-state" role="status" data-testid="status-loading-reports">
+                <p>Loading shared Ciber reports…</p>
+              </div>
+            ) : filteredReports.length ? filteredReports.map((report, index) => (
               <article className="report-card" key={report.id} style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }} data-testid={`card-report-${report.id}`}>
-                {report.photoDataUrl && <img className="report-photo" src={report.photoDataUrl} alt={report.itemName} data-testid={`img-report-${report.id}`} />}
+                {(report.photoUrl || report.photoDataUrl) && <img className="report-photo" src={report.photoUrl ?? report.photoDataUrl} alt={report.itemName} data-testid={`img-report-${report.id}`} />}
                 <div className="card-top">
                   <span className={`kind-chip ${report.kind}`}>{report.kind === 'lost' ? 'Lost item' : 'Found item'}</span>
                   <span className={`status-small${report.status === 'reunited' ? ' reunited' : ''}`} data-testid={`status-report-${report.id}`}>{report.status === 'reunited' ? 'Reunited' : 'Open'}</span>
@@ -543,7 +756,7 @@ function Home() {
             )}
           </div>
           <div className="bottom-note" data-testid="text-storage-note">
-            <ShieldCheck size={15} /> This is a local bulletin: reports are saved only in this browser and are not shared with other devices.
+            <ShieldCheck size={15} /> Reports are shared securely with signed-in Foundit accounts and sync between devices.
           </div>
         </div>
       </section>
@@ -606,12 +819,12 @@ function Home() {
                     disabled={isPhotoProcessing}
                     data-testid="input-report-photo"
                   />
-                  <p className="photo-hint">JPG, PNG, or WebP · up to 10 MB · resized for this browser</p>
+                  <p className="photo-hint">JPG, PNG, or WebP · up to 10 MB · stored privately with the report</p>
                   {isPhotoProcessing && <p className="photo-processing" role="status" data-testid="status-photo-processing">Preparing photo…</p>}
-                  {photoDataUrl && (
+                  {(photoDataUrl || retainedPhotoUrl) && (
                     <div className="photo-preview">
-                      <img src={photoDataUrl} alt="Preview of the selected item" data-testid="img-report-photo-preview" />
-                      <button type="button" className="photo-remove" onClick={() => setPhotoDataUrl(null)} data-testid="button-remove-report-photo">
+                      <img src={photoDataUrl ?? retainedPhotoUrl ?? undefined} alt="Preview of the selected item" data-testid="img-report-photo-preview" />
+                      <button type="button" className="photo-remove" onClick={() => { setPhotoDataUrl(null); setRetainedPhotoPath(null); setRetainedPhotoUrl(null); }} data-testid="button-remove-report-photo">
                         <X size={13} /> Remove photo
                       </button>
                     </div>
@@ -623,9 +836,9 @@ function Home() {
                 </div>
               </div>
               <div className="form-footer">
-                <span className="form-hint">Contact is optional.<br />Reports are saved on this browser only.</span>
-                <button className="button-primary" type="submit" disabled={isPhotoProcessing} data-testid="button-submit-report">
-                  {editingReport ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Post report</>}
+                <span className="form-hint">Contact is optional.<br />Reports and photos sync across devices.</span>
+                <button className="button-primary" type="submit" disabled={isPhotoProcessing || isSavingReport} data-testid="button-submit-report">
+                  {isSavingReport ? 'Saving…' : editingReport ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Post report</>}
                 </button>
               </div>
             </form>
@@ -644,7 +857,7 @@ function Home() {
               </div>
               <button className="close-button" onClick={() => setSelectedReport(null)} aria-label="Close details" data-testid="button-close-details"><X size={17} /></button>
             </div>
-            {selectedReport.photoDataUrl && <img className="detail-photo" src={selectedReport.photoDataUrl} alt={`Photo of ${selectedReport.itemName}`} data-testid={`img-detail-${selectedReport.id}`} />}
+            {(selectedReport.photoUrl || selectedReport.photoDataUrl) && <img className="detail-photo" src={selectedReport.photoUrl ?? selectedReport.photoDataUrl} alt={`Photo of ${selectedReport.itemName}`} data-testid={`img-detail-${selectedReport.id}`} />}
             <p className="detail-body">{selectedReport.description}</p>
             <div className="detail-facts">
               <div className="detail-fact"><MapPin size={15} /><span><span className="fact-label">School location</span><span className="fact-value">{selectedReport.location}</span></span></div>
@@ -664,15 +877,15 @@ function Home() {
                   {selectedContact.label} <ArrowRight size={14} />
                 </a>
               )}
-              {selectedReport.ownerId === ownerId && (
+              {selectedReport.ownerId === user.id && (
                 <>
-                  <button className="button-outline" onClick={() => openEditForm(selectedReport)} data-testid={`button-edit-report-${selectedReport.id}`}>
+                  <button className="button-outline" disabled={isMutatingReport} onClick={() => openEditForm(selectedReport)} data-testid={`button-edit-report-${selectedReport.id}`}>
                     <Pencil size={14} /> Edit report
                   </button>
-                  <button className="button-outline button-delete" onClick={() => deleteReport(selectedReport)} data-testid={`button-delete-report-${selectedReport.id}`}>
+                  <button className="button-outline button-delete" disabled={isMutatingReport} onClick={() => void deleteReport(selectedReport)} data-testid={`button-delete-report-${selectedReport.id}`}>
                     <Trash2 size={14} /> Delete report
                   </button>
-                  <button className="button-outline button-reunited" onClick={() => updateStatus(selectedReport)} data-testid={`button-toggle-status-${selectedReport.id}`}>
+                  <button className="button-outline button-reunited" disabled={isMutatingReport} onClick={() => void updateStatus(selectedReport)} data-testid={`button-toggle-status-${selectedReport.id}`}>
                     {selectedReport.status === 'open' ? <><Check size={15} /> Mark reunited</> : <><ArrowRight size={15} /> Reopen report</>}
                   </button>
                 </>
@@ -687,13 +900,135 @@ function Home() {
   );
 }
 
+function AuthGate() {
+  const [session, setSession] = useState<Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session']>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) setAuthError(error.message);
+      setSession(data.session);
+      setIsLoading(false);
+    }).catch((error: unknown) => {
+      if (!active) return;
+      setAuthError(errorText(error));
+      setIsLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      setSession(nextSession);
+      setIsLoading(false);
+      setAuthError('');
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  if (isLoading) {
+    return <main className="auth-page"><div className="auth-card auth-loading" role="status">Checking your Foundit account…</div></main>;
+  }
+  return session
+    ? <Home user={session.user} />
+    : <AuthScreen initialError={authError} />;
+}
+
+function AuthScreen({ initialError }: { initialError: string }) {
+  const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState(initialError);
+  const [message, setMessage] = useState('');
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    setIsSubmitting(true);
+    try {
+      const normalizedEmail = email.trim().toLowerCase();
+      if (mode === 'sign-up') {
+        const { data, error: signUpError } = await supabase.auth.signUp({
+          email: normalizedEmail,
+          password,
+          options: { emailRedirectTo: window.location.origin },
+        });
+        if (signUpError) throw signUpError;
+        if (data.session) {
+          setMessage('Your account is ready. You are signed in.');
+        } else {
+          setMessage('Account created. Check your email to confirm your address, then sign in.');
+        }
+      } else {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email: normalizedEmail,
+          password,
+        });
+        if (signInError) throw signInError;
+      }
+    } catch (submitError) {
+      setError(errorText(submitError));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function changeMode(nextMode: 'sign-in' | 'sign-up') {
+    setMode(nextMode);
+    setError('');
+    setMessage('');
+  }
+
+  return (
+    <main className="auth-page">
+      <section className="auth-card" aria-labelledby="auth-title">
+        <a className="brand auth-brand" href="/" aria-label="Foundit home">
+          <span className="brand-mark"><Compass size={21} strokeWidth={1.8} /></span>
+          <span><span className="brand-name">Foundit</span><span className="brand-sub">Ciber school lost &amp; found</span></span>
+        </a>
+        <div className="eyebrow">Ciber student access</div>
+        <h1 id="auth-title" className="auth-title">{mode === 'sign-in' ? 'Welcome back.' : 'Join the bulletin.'}</h1>
+        <p className="auth-copy">Sign in to share lost-and-found reports with Ciber students on every device.</p>
+
+        <div className="auth-tabs" role="tablist" aria-label="Account access">
+          <button type="button" role="tab" aria-selected={mode === 'sign-in'} className={mode === 'sign-in' ? 'active' : ''} onClick={() => changeMode('sign-in')} data-testid="tab-sign-in">Sign in</button>
+          <button type="button" role="tab" aria-selected={mode === 'sign-up'} className={mode === 'sign-up' ? 'active' : ''} onClick={() => changeMode('sign-up')} data-testid="tab-sign-up">Create account</button>
+        </div>
+
+        <form className="auth-form" onSubmit={submit} data-testid="form-auth">
+          <label className="auth-field">
+            <span>Email address</span>
+            <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} data-testid="input-auth-email" />
+          </label>
+          <label className="auth-field">
+            <span>Password</span>
+            <input type="password" autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} maxLength={72} data-testid="input-auth-password" />
+            {mode === 'sign-up' && <small>Use at least 6 characters.</small>}
+          </label>
+          {error && <p className="auth-alert error" role="alert" data-testid="error-auth">{error}</p>}
+          {message && <p className="auth-alert success" role="status" data-testid="status-auth">{message}</p>}
+          <button className="button-primary auth-submit" type="submit" disabled={isSubmitting} data-testid="button-auth-submit">
+            {isSubmitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in to Foundit' : 'Create student account'}
+          </button>
+        </form>
+        <p className="auth-footnote"><ShieldCheck size={14} /> Only signed-in accounts can view shared reports.</p>
+      </section>
+    </main>
+  );
+}
+
 function Router() {
   return (
     // Keep a shared shell (sidebar, navbar) outside the boundary so it
     // survives a page crash.
     <RoutedErrorBoundary>
       <Switch>
-        <Route path="/" component={Home} />
+        <Route path="/" component={AuthGate} />
         <Route component={NotFound} />
       </Switch>
     </RoutedErrorBoundary>
