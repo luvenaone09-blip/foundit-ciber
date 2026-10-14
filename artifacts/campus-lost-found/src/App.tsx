@@ -373,8 +373,8 @@ function Home() {
       return;
     }
     const form = new FormData(event.currentTarget);
-    const contact = String(form.get('contact')).trim();
-    if (!isValidContact(contact)) {
+    const contact = String(form.get('contact') ?? '').trim();
+    if (contact && !isValidContact(contact)) {
       setToast('Enter a valid email address or phone number.');
       return;
     }
@@ -618,12 +618,12 @@ function Home() {
                   )}
                 </div>
                 <div className="field wide">
-                  <label htmlFor="report-contact">Contact (email or phone)</label>
-                  <input id="report-contact" name="contact" type="text" inputMode="text" autoCapitalize="none" defaultValue={editingReport?.contact ?? ''} placeholder="Email address or phone number" required maxLength={120} data-testid="input-report-contact" />
+                  <label htmlFor="report-contact">Contact person (optional)</label>
+                  <input id="report-contact" name="contact" type="text" inputMode="text" autoCapitalize="none" defaultValue={editingReport?.contact ?? ''} placeholder="Email or phone number (optional)" maxLength={120} data-testid="input-report-contact" />
                 </div>
               </div>
               <div className="form-footer">
-                <span className="form-hint">Saved on this browser only.<br />Use a school email or phone number.</span>
+                <span className="form-hint">Contact is optional.<br />Reports are saved on this browser only.</span>
                 <button className="button-primary" type="submit" disabled={isPhotoProcessing} data-testid="button-submit-report">
                   {editingReport ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Post report</>}
                 </button>
@@ -650,10 +650,12 @@ function Home() {
               <div className="detail-fact"><MapPin size={15} /><span><span className="fact-label">School location</span><span className="fact-value">{selectedReport.location}</span></span></div>
               <div className="detail-fact"><CalendarDays size={15} /><span><span className="fact-label">Date</span><span className="fact-value">{formatDate(selectedReport.date)}</span></span></div>
               <div className="detail-fact"><Clock3 size={15} /><span><span className="fact-label">Report status</span><span className="fact-value">{selectedReport.status === 'open' ? 'Still looking' : 'Reunited'}</span></span></div>
-              <div className="detail-fact">
-                {selectedContact?.channel === 'email' ? <Mail size={15} /> : <Phone size={15} />}
-                <span><span className="fact-label">Reach out</span><span className="fact-value">{selectedReport.contact}</span></span>
-              </div>
+              {selectedContact && (
+                <div className="detail-fact">
+                  {selectedContact.channel === 'email' ? <Mail size={15} /> : <Phone size={15} />}
+                  <span><span className="fact-label">Reach out</span><span className="fact-value">{selectedReport.contact}</span></span>
+                </div>
+              )}
             </div>
             <div className="detail-actions">
               {selectedContact && (
