@@ -255,9 +255,9 @@ function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <a className="brand" href="/" aria-label="Campus Lost & Found home">
+        <a className="brand" href="/" aria-label="Foundit home">
           <span className="brand-mark"><Compass size={21} strokeWidth={1.8} /></span>
-          <span><span className="brand-name">Campus Lost &amp; Found</span><span className="brand-sub">A neighborly bulletin</span></span>
+          <span><span className="brand-name">Foundit</span><span className="brand-sub">Campus lost &amp; found</span></span>
         </a>
         <div className="nav-right">
           <span className="local-note"><ShieldCheck size={15} /> Reports stay on this browser</span>
@@ -376,7 +376,7 @@ function Home() {
       </section>
 
       <footer className="footer">
-        <span><strong>Campus Lost &amp; Found</strong> · A small act of looking out.</span>
+        <span><strong>Foundit</strong> · A small act of looking out.</span>
         <span>Need a hand? Start with the details, then reach out kindly.</span>
       </footer>
 
@@ -455,7 +455,7 @@ function Home() {
               <div className="detail-fact"><Mail size={15} /><span><span className="fact-label">Reach out</span><span className="fact-value">{selectedReport.contact}</span></span></div>
             </div>
             <div className="detail-actions">
-              <a className="button-primary" href={`mailto:${encodeURIComponent(selectedReport.contact)}?subject=${encodeURIComponent(`Campus Lost & Found: ${selectedReport.itemName}`)}`} data-testid={`link-contact-poster-${selectedReport.id}`}>
+              <a className="button-primary" href={`mailto:${encodeURIComponent(selectedReport.contact)}?subject=${encodeURIComponent(`Foundit: ${selectedReport.itemName}`)}`} data-testid={`link-contact-poster-${selectedReport.id}`}>
                 <Mail size={15} /> Contact poster <ArrowRight size={14} />
               </a>
               <button className="button-outline button-reunited" onClick={() => updateStatus(selectedReport)} data-testid={`button-toggle-status-${selectedReport.id}`}>

@@ -1,6 +1,6 @@
 kind = "web"
 previewPath = "/"
-title = "Campus Lost & Found"
+title = "Foundit"
 description = "A campus lost-and-found app for students to browse, search, filter, and post reports for lost and found belongings."
 version = "1.0.0"
 id = "artifacts/campus-lost-found"
