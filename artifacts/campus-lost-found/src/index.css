@@ -605,9 +605,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .detail-fact svg { color: #b76e4c; margin-top: 2px; flex: none; }
 .fact-label { display: block; color: #859087; font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; margin-bottom: 3px; }
 .fact-value { color: #375248; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
-.detail-actions { display: flex; gap: 9px; flex-wrap: wrap; }
+.detail-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.detail-actions .button-primary, .detail-actions .button-outline { display: inline-flex; align-items: center; gap: 7px; }
 .button-outline { border: 1px solid #d6dacf; border-radius: 10px; background: transparent; color: #3d5a4e; padding: 11px 14px; font-size: 12px; font-weight: 700; }
 .button-outline:hover { background: #f0efe5; border-color: #abb9ad; }
+.button-delete { color: #9a4e3d; border-color: #e4c6b8; }
+.button-delete:hover { color: #803927; background: #f8e9e1; border-color: #d9a995; }
 .button-reunited { background: #31594e; }
 .detail-status { display: inline-flex; border-radius: 999px; background: #eeeade; color: #737e73; padding: 7px 10px; font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
 .detail-status.reunited { background: #f5e7d9; color: #a65f40; }

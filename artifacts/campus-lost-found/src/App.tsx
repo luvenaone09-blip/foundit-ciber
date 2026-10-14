@@ -17,9 +17,12 @@ import {
   ImagePlus,
   Mail,
   MapPin,
+  Pencil,
+  Phone,
   Plus,
   Search,
   ShieldCheck,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
@@ -43,13 +46,49 @@ interface Report {
   location: string;
   date: string;
   contact: string;
+  ownerId?: string;
   photoDataUrl?: string;
   status: ReportStatus;
   createdAt: string;
 }
 
 const STORAGE_KEY = 'campus-lost-found-reports-v1';
+const OWNER_STORAGE_KEY = 'foundit-browser-owner-v1';
 const categories = ['Accessories', 'Bags', 'Books & notes', 'Clothing', 'Electronics', 'Keys & cards', 'Other'];
+
+function getBrowserOwnerId() {
+  try {
+    const saved = localStorage.getItem(OWNER_STORAGE_KEY);
+    if (saved) return saved;
+    const generated = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    localStorage.setItem(OWNER_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+}
+
+function isValidContact(value: string) {
+  const contact = value.trim();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) return true;
+  const compactPhone = contact.replace(/[\s().-]/g, '');
+  return /^\+?\d{7,15}$/.test(compactPhone);
+}
+
+function getContactLink(contact: string) {
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)) {
+    return {
+      href: `mailto:${encodeURIComponent(contact)}`,
+      label: 'Email poster',
+      channel: 'email' as const,
+    };
+  }
+  return {
+    href: `tel:${contact.replace(/[^\d+]/g, '')}`,
+    label: 'Call poster',
+    channel: 'phone' as const,
+  };
+}
 
 async function compressPhoto(file: File): Promise<string> {
   const bitmap = await createImageBitmap(file);
@@ -119,7 +158,7 @@ const illustrativeReports: Report[] = [
     itemName: 'Navy canvas tote',
     category: 'Bags',
     description: 'A dark blue tote with a small stitched sunflower near the pocket. My studio sketchbook is inside.',
-    location: 'Arts Building, room 204',
+    location: 'Ciber arts room 204',
     date: dateOffset(0),
     contact: 'elena.morris@example.edu',
     status: 'open',
@@ -131,7 +170,7 @@ const illustrativeReports: Report[] = [
     itemName: 'Set of silver keys',
     category: 'Keys & cards',
     description: 'Three keys on a green woven loop. Turned in at the front desk after my 10 a.m. lecture.',
-    location: 'Morrow Library, front desk',
+    location: 'Ciber library, front desk',
     date: dateOffset(0),
     contact: 'jonah.lee@example.edu',
     status: 'open',
@@ -143,7 +182,7 @@ const illustrativeReports: Report[] = [
     itemName: 'Wireless earbuds case',
     category: 'Electronics',
     description: 'White charging case with a tiny blue tape mark on the hinge. The earbuds are inside.',
-    location: 'North Quad, near the fountain',
+    location: 'Main courtyard, by the fountain',
     date: dateOffset(1),
     contact: 'riley.parker@example.edu',
     status: 'open',
@@ -155,7 +194,7 @@ const illustrativeReports: Report[] = [
     itemName: 'Rust-red knit scarf',
     category: 'Clothing',
     description: 'Soft hand-knit scarf left over a chair. Ask me for the small detail on one end to confirm it is yours.',
-    location: 'Cedar Hall café',
+    location: 'School café',
     date: dateOffset(2),
     contact: 'samira.ahmed@example.edu',
     status: 'open',
@@ -167,7 +206,7 @@ const illustrativeReports: Report[] = [
     itemName: 'Calculus notebook',
     category: 'Books & notes',
     description: 'Green spiral notebook, lots of worked examples and a name written inside the front cover.',
-    location: 'Science Center, lecture hall B',
+    location: 'Ciber science room B',
     date: dateOffset(3),
     contact: 'milo.kim@example.edu',
     status: 'open',
@@ -179,7 +218,7 @@ const illustrativeReports: Report[] = [
     itemName: 'Sage metal water bottle',
     category: 'Other',
     description: 'Insulated bottle with a few small stickers. It is safe with the student union welcome desk.',
-    location: 'Student Union, welcome desk',
+    location: 'Ciber front office',
     date: dateOffset(4),
     contact: 'avery.bell@example.edu',
     status: 'open',
@@ -187,12 +226,18 @@ const illustrativeReports: Report[] = [
   },
 ];
 
-function readReports(): Report[] {
+function readReports(ownerId: string): Report[] {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved) as Report[];
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) {
+        return parsed.map((report) => (
+          report.id.startsWith('report-') && !report.ownerId
+            ? { ...report, ownerId }
+            : report
+        ));
+      }
     }
   } catch {
     // If browser storage is unavailable, the bulletin still works for this visit.
@@ -216,13 +261,15 @@ function formatRelative(value: string) {
 }
 
 function Home() {
-  const [reports, setReports] = useState<Report[]>(readReports);
+  const [ownerId] = useState(getBrowserOwnerId);
+  const [reports, setReports] = useState<Report[]>(() => readReports(ownerId));
   const [kindFilter, setKindFilter] = useState<'all' | ReportKind>('all');
   const [statusFilter, setStatusFilter] = useState<'open' | 'all' | 'reunited'>('open');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
+  const [editingReport, setEditingReport] = useState<Report | null>(null);
   const [toast, setToast] = useState('');
   const [draftKind, setDraftKind] = useState<ReportKind>('lost');
   const [draftCategory, setDraftCategory] = useState('Accessories');
@@ -271,12 +318,25 @@ function Home() {
   }, [reports, kindFilter, statusFilter, categoryFilter, query]);
 
   const openCount = reports.filter((report) => report.status === 'open').length;
+  const selectedContact = selectedReport ? getContactLink(selectedReport.contact) : null;
 
   function openCreateForm() {
+    setEditingReport(null);
     setDraftKind('lost');
     setDraftCategory('Accessories');
     setDraftDate(dateOffset(0));
     setPhotoDataUrl(null);
+    setIsFormOpen(true);
+  }
+
+  function openEditForm(report: Report) {
+    if (report.ownerId !== ownerId) return;
+    setEditingReport(report);
+    setDraftKind(report.kind);
+    setDraftCategory(report.category);
+    setDraftDate(report.date);
+    setPhotoDataUrl(report.photoDataUrl ?? null);
+    setSelectedReport(null);
     setIsFormOpen(true);
   }
 
@@ -306,37 +366,48 @@ function Home() {
     }
   }
 
-  function createReport(event: FormEvent<HTMLFormElement>) {
+  function saveReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isPhotoProcessing) {
       setToast('Please wait while your photo is being prepared.');
       return;
     }
     const form = new FormData(event.currentTarget);
+    const contact = String(form.get('contact')).trim();
+    if (!isValidContact(contact)) {
+      setToast('Enter a valid email address or phone number.');
+      return;
+    }
+    const existingReport = editingReport;
     const report: Report = {
-      id: `report-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      id: existingReport?.id ?? `report-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       kind: draftKind,
       itemName: String(form.get('itemName')).trim(),
       category: draftCategory,
       description: String(form.get('description')).trim(),
       location: String(form.get('location')).trim(),
       date: draftDate,
-      contact: String(form.get('contact')).trim(),
+      contact,
+      ownerId: existingReport?.ownerId ?? ownerId,
       photoDataUrl: photoDataUrl ?? undefined,
-      status: 'open',
-      createdAt: new Date().toISOString(),
+      status: existingReport?.status ?? 'open',
+      createdAt: existingReport?.createdAt ?? new Date().toISOString(),
     };
-    setReports((current) => [report, ...current]);
+    setReports((current) => existingReport
+      ? current.map((entry) => entry.id === report.id ? report : entry)
+      : [report, ...current]);
     setIsFormOpen(false);
     setPhotoDataUrl(null);
+    setEditingReport(null);
     setKindFilter('all');
     setStatusFilter('open');
     setCategoryFilter('all');
     setQuery('');
-    setToast('Your report is on this browser’s bulletin.');
+    setToast(existingReport ? 'Your report was updated.' : 'Your report is on this browser’s bulletin.');
   }
 
   function updateStatus(report: Report) {
+    if (report.ownerId !== ownerId) return;
     const nextStatus: ReportStatus = report.status === 'open' ? 'reunited' : 'open';
     const updated = { ...report, status: nextStatus };
     setReports((current) => current.map((entry) => entry.id === report.id ? updated : entry));
@@ -344,12 +415,21 @@ function Home() {
     setToast(nextStatus === 'reunited' ? 'Marked reunited. Thanks for closing the loop.' : 'Report moved back to open.');
   }
 
+  function deleteReport(report: Report) {
+    if (report.ownerId !== ownerId) return;
+    const confirmed = window.confirm(`Delete "${report.itemName}"? This will permanently remove it from this browser.`);
+    if (!confirmed) return;
+    setReports((current) => current.filter((entry) => entry.id !== report.id));
+    setSelectedReport(null);
+    setToast('Your report was deleted.');
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
         <a className="brand" href="/" aria-label="Foundit home">
           <span className="brand-mark"><Compass size={21} strokeWidth={1.8} /></span>
-          <span><span className="brand-name">Foundit</span><span className="brand-sub">Campus lost &amp; found</span></span>
+          <span><span className="brand-name">Foundit</span><span className="brand-sub">Ciber school lost &amp; found</span></span>
         </a>
         <div className="nav-right">
           <span className="local-note"><ShieldCheck size={15} /> Reports stay on this browser</span>
@@ -363,10 +443,10 @@ function Home() {
         <div className="hero-copy-wrap">
           <div className="eyebrow">Look out for each other</div>
           <h1 id="hero-title">Lost something?<br />Let’s bring it <em>home.</em></h1>
-          <p className="hero-copy">A clear, kind place to post the things that go missing between class, coffee, and the walk back home.</p>
+          <p className="hero-copy">A clear, kind place for Ciber students to post things that go missing between classes and the walk home.</p>
         </div>
-        <aside className="hero-aside" aria-label="How the campus bulletin works">
-          <div className="aside-kicker">The campus bulletin</div>
+        <aside className="hero-aside" aria-label="How the Ciber school bulletin works">
+          <div className="aside-kicker">The Ciber school bulletin</div>
           <h2>Small things find their way back.</h2>
           <p>Share the details. Reach out directly. Close the loop when you’re reunited.</p>
           <BadgeCheck className="aside-spark" size={29} strokeWidth={1.4} />
@@ -377,9 +457,9 @@ function Home() {
         <div className="board">
           <div className="board-heading">
             <div>
-              <div className="eyebrow">Around campus</div>
+              <div className="eyebrow">Around Ciber</div>
               <h2 id="board-title">The latest reports</h2>
-              <p className="board-subtitle">Illustrative starter reports · A little more detail can make all the difference.</p>
+              <p className="board-subtitle">Illustrative Ciber school reports · A little more detail can make all the difference.</p>
             </div>
             <span className="report-count" data-testid="text-report-count">{openCount} open {openCount === 1 ? 'report' : 'reports'}</span>
           </div>
@@ -453,7 +533,7 @@ function Home() {
               <div className="empty-state" data-testid="empty-reports">
                 <div className="empty-mark"><CircleHelp size={21} /></div>
                 <h3>{query ? 'No matches just yet.' : statusFilter === 'reunited' ? 'No reunited reports here.' : 'Nothing on the board yet.'}</h3>
-                <p>{query ? 'Try a different item, detail, or campus spot.' : 'Be the first to add a clear report for someone on campus.'}</p>
+                <p>{query ? 'Try a different item, detail, or school location.' : 'Be the first to add a clear report for someone at Ciber.'}</p>
                 {query ? (
                   <button className="button-outline" onClick={() => setQuery('')} data-testid="button-clear-search">Clear search</button>
                 ) : (
@@ -478,13 +558,13 @@ function Home() {
           <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="create-title" data-testid="dialog-create-report">
             <div className="dialog-header">
               <div>
-                <div className="eyebrow">Add to the bulletin</div>
-                <h2 id="create-title" className="dialog-heading">What went missing?</h2>
-                <p className="dialog-subtitle">A useful detail or exact campus spot helps the right person recognize it.</p>
+                <div className="eyebrow">{editingReport ? 'Update your report' : 'Add to the Ciber bulletin'}</div>
+                <h2 id="create-title" className="dialog-heading">{editingReport ? 'Edit your report' : 'What went missing?'}</h2>
+                <p className="dialog-subtitle">{editingReport ? 'Update the details so the right person can recognize it.' : 'A useful detail or exact school location helps the right person recognize it.'}</p>
               </div>
               <button className="close-button" onClick={() => setIsFormOpen(false)} aria-label="Close form" data-testid="button-close-create"><X size={17} /></button>
             </div>
-            <form onSubmit={createReport} data-testid="form-create-report">
+            <form onSubmit={saveReport} data-testid="form-create-report">
               <div className="field wide" style={{ marginBottom: 14 }}>
                 <label>Is it lost or found?</label>
                 <div className="type-select">
@@ -495,7 +575,7 @@ function Home() {
               <div className="form-grid">
                 <div className="field">
                   <label htmlFor="report-item">Item name</label>
-                  <input id="report-item" name="itemName" placeholder="e.g. Green notebook" required maxLength={70} data-testid="input-item-name" />
+                  <input id="report-item" name="itemName" defaultValue={editingReport?.itemName ?? ''} placeholder="e.g. Green notebook" required maxLength={70} data-testid="input-item-name" />
                 </div>
                 <div className="field">
                   <label htmlFor="report-category">Category</label>
@@ -505,11 +585,11 @@ function Home() {
                 </div>
                 <div className="field wide">
                   <label htmlFor="report-description">Description</label>
-                  <textarea id="report-description" name="description" placeholder="Color, identifying marks, or what was with it" required maxLength={400} data-testid="input-report-description" />
+                  <textarea id="report-description" name="description" defaultValue={editingReport?.description ?? ''} placeholder="Color, identifying marks, or what was with it" required maxLength={400} data-testid="input-report-description" />
                 </div>
                 <div className="field">
                   <label htmlFor="report-location">Where was it last seen?</label>
-                  <input id="report-location" name="location" placeholder="Building or campus spot" required maxLength={100} data-testid="input-report-location" />
+                  <input id="report-location" name="location" defaultValue={editingReport?.location ?? ''} placeholder="Building or school location" required maxLength={100} data-testid="input-report-location" />
                 </div>
                 <div className="field">
                   <label htmlFor="report-date">Date</label>
@@ -538,13 +618,15 @@ function Home() {
                   )}
                 </div>
                 <div className="field wide">
-                  <label htmlFor="report-contact">How can someone reach you?</label>
-                  <input id="report-contact" name="contact" type="email" placeholder="Your email address" required maxLength={120} data-testid="input-report-contact" />
+                  <label htmlFor="report-contact">Contact (email or phone)</label>
+                  <input id="report-contact" name="contact" type="text" inputMode="text" autoCapitalize="none" defaultValue={editingReport?.contact ?? ''} placeholder="Email address or phone number" required maxLength={120} data-testid="input-report-contact" />
                 </div>
               </div>
               <div className="form-footer">
-                <span className="form-hint">Saved on this browser only.<br />Use a campus email if you can.</span>
-                <button className="button-primary" type="submit" disabled={isPhotoProcessing} data-testid="button-submit-report"><Plus size={15} /> Post report</button>
+                <span className="form-hint">Saved on this browser only.<br />Use a school email or phone number.</span>
+                <button className="button-primary" type="submit" disabled={isPhotoProcessing} data-testid="button-submit-report">
+                  {editingReport ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Post report</>}
+                </button>
               </div>
             </form>
           </section>
@@ -565,18 +647,34 @@ function Home() {
             {selectedReport.photoDataUrl && <img className="detail-photo" src={selectedReport.photoDataUrl} alt={`Photo of ${selectedReport.itemName}`} data-testid={`img-detail-${selectedReport.id}`} />}
             <p className="detail-body">{selectedReport.description}</p>
             <div className="detail-facts">
-              <div className="detail-fact"><MapPin size={15} /><span><span className="fact-label">Campus spot</span><span className="fact-value">{selectedReport.location}</span></span></div>
+              <div className="detail-fact"><MapPin size={15} /><span><span className="fact-label">School location</span><span className="fact-value">{selectedReport.location}</span></span></div>
               <div className="detail-fact"><CalendarDays size={15} /><span><span className="fact-label">Date</span><span className="fact-value">{formatDate(selectedReport.date)}</span></span></div>
               <div className="detail-fact"><Clock3 size={15} /><span><span className="fact-label">Report status</span><span className="fact-value">{selectedReport.status === 'open' ? 'Still looking' : 'Reunited'}</span></span></div>
-              <div className="detail-fact"><Mail size={15} /><span><span className="fact-label">Reach out</span><span className="fact-value">{selectedReport.contact}</span></span></div>
+              <div className="detail-fact">
+                {selectedContact?.channel === 'email' ? <Mail size={15} /> : <Phone size={15} />}
+                <span><span className="fact-label">Reach out</span><span className="fact-value">{selectedReport.contact}</span></span>
+              </div>
             </div>
             <div className="detail-actions">
-              <a className="button-primary" href={`mailto:${encodeURIComponent(selectedReport.contact)}?subject=${encodeURIComponent(`Foundit: ${selectedReport.itemName}`)}`} data-testid={`link-contact-poster-${selectedReport.id}`}>
-                <Mail size={15} /> Contact poster <ArrowRight size={14} />
-              </a>
-              <button className="button-outline button-reunited" onClick={() => updateStatus(selectedReport)} data-testid={`button-toggle-status-${selectedReport.id}`}>
-                {selectedReport.status === 'open' ? <><Check size={15} /> Mark reunited</> : <><ArrowRight size={15} /> Reopen report</>}
-              </button>
+              {selectedContact && (
+                <a className="button-primary" href={selectedContact.href} data-testid={`link-contact-poster-${selectedReport.id}`}>
+                  {selectedContact.channel === 'email' ? <Mail size={15} /> : <Phone size={15} />}
+                  {selectedContact.label} <ArrowRight size={14} />
+                </a>
+              )}
+              {selectedReport.ownerId === ownerId && (
+                <>
+                  <button className="button-outline" onClick={() => openEditForm(selectedReport)} data-testid={`button-edit-report-${selectedReport.id}`}>
+                    <Pencil size={14} /> Edit report
+                  </button>
+                  <button className="button-outline button-delete" onClick={() => deleteReport(selectedReport)} data-testid={`button-delete-report-${selectedReport.id}`}>
+                    <Trash2 size={14} /> Delete report
+                  </button>
+                  <button className="button-outline button-reunited" onClick={() => updateStatus(selectedReport)} data-testid={`button-toggle-status-${selectedReport.id}`}>
+                    {selectedReport.status === 'open' ? <><Check size={15} /> Mark reunited</> : <><ArrowRight size={15} /> Reopen report</>}
+                  </button>
+                </>
+              )}
             </div>
           </section>
         </div>
