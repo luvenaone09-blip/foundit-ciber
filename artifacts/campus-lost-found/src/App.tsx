@@ -610,7 +610,7 @@ function Home({
   async function deleteReport(report: Report) {
     if (!user) return;
     if (report.ownerId !== user.id || isMutatingReport) return;
-    const confirmed = window.confirm(`Delete "${report.itemName}"? This will permanently remove it from the shared Ciber bulletin.`);
+    const confirmed = window.confirm(`Delete "${report.itemName}"? This will permanently remove it from the shared Ciber platform.`);
     if (!confirmed) return;
     setIsMutatingReport(true);
     try {
@@ -675,8 +675,8 @@ function Home({
           <h1 id="hero-title">Lost something?<br />Let’s bring it <em>home.</em></h1>
           <p className="hero-copy">A clear, kind place for Ciber students to post things that go missing between classes and the walk home.</p>
         </div>
-        <aside className="hero-aside" aria-label="How the Ciber school bulletin works">
-          <div className="aside-kicker">The Ciber school bulletin</div>
+        <aside className="hero-aside" aria-label="How the Ciber school platform works">
+          <div className="aside-kicker">The Ciber school platform</div>
           <h2>Small things find their way back.</h2>
           <p>Share the details. Reach out directly. Close the loop when you’re reunited.</p>
           <BadgeCheck className="aside-spark" size={29} strokeWidth={1.4} />
@@ -799,7 +799,7 @@ function Home({
           <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="create-title" data-testid="dialog-create-report">
             <div className="dialog-header">
               <div>
-                <div className="eyebrow">{editingReport ? 'Update your report' : 'Add to the Ciber bulletin'}</div>
+                <div className="eyebrow">{editingReport ? 'Update your report' : 'Add to the Ciber platform'}</div>
                 <h2 id="create-title" className="dialog-heading">{editingReport ? 'Edit your report' : 'What went missing?'}</h2>
                 <p className="dialog-subtitle">{editingReport ? 'Update the details so the right person can recognize it.' : 'A useful detail or exact school location helps the right person recognize it.'}</p>
               </div>
@@ -1108,7 +1108,7 @@ function AuthPopover({
             <>
               <div className="popover-heading">
                 <div className="eyebrow">Ciber student access</div>
-                <h2>{mode === 'sign-in' ? 'Welcome back.' : 'Join the bulletin.'}</h2>
+                <h2>{mode === 'sign-in' ? 'Welcome back.' : 'Join the platform.'}</h2>
                 <p>Sign in once to keep your reports in sync across devices.</p>
               </div>
               <div className="auth-tabs" role="tablist" aria-label="Account access">
