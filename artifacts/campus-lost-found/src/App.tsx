@@ -26,7 +26,6 @@ import {
   Search,
   ShieldCheck,
   Trash2,
-  UserRound,
   X,
 } from 'lucide-react';
 import {
@@ -287,16 +286,18 @@ function errorText(error: unknown) {
 
 function Home({
   user,
+  authError,
   authOpen,
   setAuthOpen,
 }: {
-  user: User;
+  user: User | null;
+  authError: string;
   authOpen: boolean;
   setAuthOpen: (open: boolean) => void;
 }) {
   const [reports, setReports] = useState<Report[]>([]);
   const [kindFilter, setKindFilter] = useState<'all' | ReportKind>('all');
-  const [statusFilter, setStatusFilter] = useState<'open' | 'all' | 'reunited'>('open');
+  const [statusFilter, setStatusFilter] = useState<'open' | 'all' | 'reunited'>('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -315,6 +316,15 @@ function Home({
   const [isLoadingReports, setIsLoadingReports] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+
+  useEffect(() => {
+    if (user) return;
+    setIsFormOpen(false);
+    setEditingReport(null);
+    setPhotoDataUrl(null);
+    setRetainedPhotoPath(null);
+    setRetainedPhotoUrl(null);
+  }, [user?.id]);
 
   const refreshReports = useCallback(async () => {
     const { data, error } = await supabase
@@ -352,7 +362,7 @@ function Home({
     const loadInitialReports = async () => {
       setIsLoadingReports(true);
       try {
-        await migrateLegacyReports(user.id);
+        if (user) await migrateLegacyReports(user.id);
         await refreshReports();
       } catch (error) {
         if (active) setLoadError(`Could not load shared reports: ${errorText(error)}`);
@@ -363,7 +373,7 @@ function Home({
 
     void loadInitialReports();
     const channel = supabase
-      .channel('foundit-reports')
+      .channel(`foundit-reports-${user?.id ?? 'public'}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'reports' }, () => {
         void refreshReports().catch((error) => {
           if (active) setLoadError(`Live refresh failed: ${errorText(error)}`);
@@ -391,7 +401,7 @@ function Home({
       window.clearInterval(photoRefreshTimer);
       void supabase.removeChannel(channel);
     };
-  }, [user.id, refreshReports]);
+  }, [user?.id, refreshReports]);
 
   useEffect(() => {
     if (!isFormOpen && !selectedReport) return;
@@ -429,6 +439,10 @@ function Home({
   const selectedContact = selectedReport ? getContactLink(selectedReport.contact) : null;
 
   function openCreateForm() {
+    if (!user) {
+      setAuthOpen(true);
+      return;
+    }
     setEditingReport(null);
     setDraftKind('lost');
     setDraftCategory('Accessories');
@@ -440,6 +454,7 @@ function Home({
   }
 
   function openEditForm(report: Report) {
+    if (!user) return;
     if (report.ownerId !== user.id) return;
     setEditingReport(report);
     setDraftKind(report.kind);
@@ -482,6 +497,11 @@ function Home({
 
   async function saveReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!user) {
+      setIsFormOpen(false);
+      setAuthOpen(true);
+      return;
+    }
     if (isSavingReport) return;
     if (isPhotoProcessing) {
       setToast('Please wait while your photo is being prepared.');
@@ -542,7 +562,7 @@ function Home({
       setRetainedPhotoUrl(null);
       setEditingReport(null);
       setKindFilter('all');
-      setStatusFilter('open');
+      setStatusFilter('all');
       setCategoryFilter('all');
       setQuery('');
       try {
@@ -564,6 +584,7 @@ function Home({
   }
 
   async function updateStatus(report: Report) {
+    if (!user) return;
     if (report.ownerId !== user.id || isMutatingReport) return;
     const nextStatus: ReportStatus = report.status === 'open' ? 'reunited' : 'open';
     setIsMutatingReport(true);
@@ -587,6 +608,7 @@ function Home({
   }
 
   async function deleteReport(report: Report) {
+    if (!user) return;
     if (report.ownerId !== user.id || isMutatingReport) return;
     const confirmed = window.confirm(`Delete "${report.itemName}"? This will permanently remove it from the shared Ciber bulletin.`);
     if (!confirmed) return;
@@ -622,7 +644,7 @@ function Home({
     setIsLoadingReports(true);
     setLoadError('');
     try {
-      await migrateLegacyReports(user.id);
+      if (user) await migrateLegacyReports(user.id);
       await refreshReports();
     } catch (error) {
       setLoadError(`Could not load shared reports: ${errorText(error)}`);
@@ -640,7 +662,7 @@ function Home({
         </a>
         <div className="nav-right">
           <span className="local-note"><ShieldCheck size={15} /> {realtimeStatus === 'connected' ? 'Live reports synced' : realtimeStatus === 'connecting' ? 'Connecting to live reports…' : 'Live sync unavailable'}</span>
-          <AuthPopover user={user} open={authOpen} setOpen={setAuthOpen} />
+          <AuthPopover user={user} initialError={authError} open={authOpen} setOpen={setAuthOpen} />
           <button className="button-primary" onClick={openCreateForm} data-testid="button-create-report">
             <Plus size={16} /> Post a report
           </button>
@@ -762,7 +784,7 @@ function Home({
             )}
           </div>
           <div className="bottom-note" data-testid="text-storage-note">
-            <ShieldCheck size={15} /> Reports are shared securely with signed-in Foundit accounts and sync between devices.
+            <ShieldCheck size={15} /> Reports, optional contact details, and photos are public. Sign in to post or manage your own reports.
           </div>
         </div>
       </section>
@@ -825,7 +847,7 @@ function Home({
                     disabled={isPhotoProcessing}
                     data-testid="input-report-photo"
                   />
-                  <p className="photo-hint">JPG, PNG, or WebP · up to 10 MB · stored privately with the report</p>
+                  <p className="photo-hint">JPG, PNG, or WebP · up to 10 MB · visible to anyone with the report</p>
                   {isPhotoProcessing && <p className="photo-processing" role="status" data-testid="status-photo-processing">Preparing photo…</p>}
                   {(photoDataUrl || retainedPhotoUrl) && (
                     <div className="photo-preview">
@@ -842,7 +864,7 @@ function Home({
                 </div>
               </div>
               <div className="form-footer">
-                <span className="form-hint">Contact is optional.<br />Reports and photos sync across devices.</span>
+                <span className="form-hint">Contact is optional.<br />Your report and photo will be public.</span>
                 <button className="button-primary" type="submit" disabled={isPhotoProcessing || isSavingReport} data-testid="button-submit-report">
                   {isSavingReport ? 'Saving…' : editingReport ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Post report</>}
                 </button>
@@ -883,7 +905,7 @@ function Home({
                   {selectedContact.label} <ArrowRight size={14} />
                 </a>
               )}
-              {selectedReport.ownerId === user.id && (
+              {user && selectedReport.ownerId === user.id && (
                 <>
                   <button className="button-outline" disabled={isMutatingReport} onClick={() => openEditForm(selectedReport)} data-testid={`button-edit-report-${selectedReport.id}`}>
                     <Pencil size={14} /> Edit report
@@ -939,67 +961,7 @@ function AuthGate() {
   if (isLoading) {
     return <main className="auth-page"><div className="auth-card auth-loading" role="status">Checking your Foundit account…</div></main>;
   }
-  return session
-    ? <Home user={session.user} authOpen={authOpen} setAuthOpen={setAuthOpen} />
-    : <GuestHome authError={authError} authOpen={authOpen} setAuthOpen={setAuthOpen} />;
-}
-
-function GuestHome({
-  authError,
-  authOpen,
-  setAuthOpen,
-}: {
-  authError: string;
-  authOpen: boolean;
-  setAuthOpen: (open: boolean) => void;
-}) {
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="/" aria-label="Foundit home">
-          <span className="brand-mark"><Compass size={21} strokeWidth={1.8} /></span>
-          <span><span className="brand-name">Foundit</span><span className="brand-sub">Ciber school lost &amp; found</span></span>
-        </a>
-        <div className="nav-right">
-          <span className="local-note"><ShieldCheck size={15} /> Shared across your devices</span>
-          <AuthPopover
-            initialError={authError}
-            open={authOpen}
-            setOpen={setAuthOpen}
-          />
-        </div>
-      </header>
-
-      <section className="hero" aria-labelledby="hero-title">
-        <div className="hero-copy-wrap">
-          <div className="eyebrow">Look out for each other</div>
-          <h1 id="hero-title">Lost something?<br />Let’s bring it <em>home.</em></h1>
-          <p className="hero-copy">A clear, kind place for Ciber students to post things that go missing between classes and the walk home.</p>
-        </div>
-        <aside className="hero-aside" aria-label="How the Ciber school bulletin works">
-          <div className="aside-kicker">The Ciber school bulletin</div>
-          <h2>Small things find their way back.</h2>
-          <p>Share the details. Reach out directly. Close the loop when you’re reunited.</p>
-          <BadgeCheck className="aside-spark" size={29} strokeWidth={1.4} />
-        </aside>
-      </section>
-
-      <section className="board-wrap guest-board-wrap">
-        <div className="board guest-board">
-          <div className="eyebrow">Around Ciber</div>
-          <h2>Find your way back to what matters.</h2>
-          <p>Sign in to browse shared lost-and-found reports, post an item, or reconnect with its owner. Your reports stay in sync when you switch between your phone, laptop, and tablet.</p>
-          <button className="button-primary" type="button" onClick={() => setAuthOpen(true)}>
-            <UserRound size={16} /> Masuk / Daftar
-          </button>
-        </div>
-      </section>
-      <footer className="footer">
-        <span>Made for the Ciber school community.</span>
-        <strong>Foundit · Lost &amp; found</strong>
-      </footer>
-    </main>
-  );
+  return <Home user={session?.user ?? null} authError={authError} authOpen={authOpen} setAuthOpen={setAuthOpen} />;
 }
 
 function AuthPopover({
@@ -1115,7 +1077,7 @@ function AuthPopover({
             <ChevronDown size={14} />
           </>
         ) : (
-          <>Masuk / Daftar <ChevronDown size={15} /></>
+          <>Sign In / Sign Up <ChevronDown size={15} /></>
         )}
       </button>
 
@@ -1132,14 +1094,14 @@ function AuthPopover({
               <div className="profile-popover-heading">
                 <span className="account-avatar profile-avatar">{(user.email?.[0] ?? 'S').toUpperCase()}</span>
                 <div className="profile-account-copy">
-                  <strong>Akun Foundit</strong>
+                  <strong>Foundit account</strong>
                   <span>{user.email ?? 'Student account'}</span>
                 </div>
               </div>
-              <div className="account-status"><span className="account-status-dot" /> Akun aktif</div>
+              <div className="account-status"><span className="account-status-dot" /> Account active</div>
               {error && <p className="auth-alert error" role="alert">{error}</p>}
               <button className="button-outline profile-signout" type="button" onClick={() => void signOut()} data-testid="button-sign-out">
-                <LogOut size={15} /> Keluar (Sign Out)
+                <LogOut size={15} /> Sign out
               </button>
             </>
           ) : (
@@ -1150,8 +1112,8 @@ function AuthPopover({
                 <p>Sign in once to keep your reports in sync across devices.</p>
               </div>
               <div className="auth-tabs" role="tablist" aria-label="Account access">
-                <button type="button" role="tab" aria-selected={mode === 'sign-in'} className={mode === 'sign-in' ? 'active' : ''} onClick={() => changeMode('sign-in')} data-testid="tab-sign-in">Masuk</button>
-                <button type="button" role="tab" aria-selected={mode === 'sign-up'} className={mode === 'sign-up' ? 'active' : ''} onClick={() => changeMode('sign-up')} data-testid="tab-sign-up">Daftar</button>
+                <button type="button" role="tab" aria-selected={mode === 'sign-in'} className={mode === 'sign-in' ? 'active' : ''} onClick={() => changeMode('sign-in')} data-testid="tab-sign-in">Sign in</button>
+                <button type="button" role="tab" aria-selected={mode === 'sign-up'} className={mode === 'sign-up' ? 'active' : ''} onClick={() => changeMode('sign-up')} data-testid="tab-sign-up">Sign up</button>
               </div>
               <form className="auth-form" onSubmit={submit} data-testid="form-auth">
                 <label className="auth-field">
@@ -1161,15 +1123,15 @@ function AuthPopover({
                 <label className="auth-field">
                   <span>Password</span>
                   <input type="password" autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} maxLength={72} data-testid="input-auth-password" />
-                  {mode === 'sign-up' && <small>Gunakan minimal 6 karakter.</small>}
+                  {mode === 'sign-up' && <small>Use at least 6 characters.</small>}
                 </label>
                 {error && <p className="auth-alert error" role="alert" data-testid="error-auth">{error}</p>}
                 {message && <p className="auth-alert success" role="status" data-testid="status-auth">{message}</p>}
                 <button className="button-primary auth-submit" type="submit" disabled={isSubmitting} data-testid="button-auth-submit">
-                  {isSubmitting ? 'Mohon tunggu…' : mode === 'sign-in' ? 'Masuk ke Foundit' : 'Buat akun siswa'}
+                  {isSubmitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in to Foundit' : 'Create student account'}
                 </button>
               </form>
-              <p className="auth-footnote"><ShieldCheck size={14} /> Data laporan bersama hanya tersedia setelah masuk.</p>
+              <p className="auth-footnote"><ShieldCheck size={14} /> Anyone can browse reports. Sign in to post or manage your own.</p>
             </>
           )}
         </section>

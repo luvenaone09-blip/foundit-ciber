@@ -1,4 +1,4 @@
--- Foundit: reports, student-owned edit/delete, shared reads, realtime, and private report photos.
+-- Foundit: public report/photo reads, student-owned write access, and realtime.
 -- Run this script once in Supabase Dashboard > SQL Editor.
 
 create table if not exists public.reports (
@@ -21,11 +21,14 @@ create index if not exists reports_created_at_idx
 
 alter table public.reports enable row level security;
 grant select, insert, update, delete on public.reports to authenticated;
+grant select on public.reports to anon;
+revoke insert, update, delete on public.reports from anon;
 
 drop policy if exists "Signed-in students can view reports" on public.reports;
-create policy "Signed-in students can view reports"
+drop policy if exists "Anyone can view reports" on public.reports;
+create policy "Anyone can view reports"
   on public.reports for select
-  to authenticated
+  to anon, authenticated
   using (true);
 
 drop policy if exists "Students can create their own reports" on public.reports;
@@ -55,10 +58,12 @@ on conflict (id) do update
       allowed_mime_types = array['image/jpeg'];
 
 drop policy if exists "Signed-in students can view report photos" on storage.objects;
-create policy "Signed-in students can view report photos"
+drop policy if exists "Anyone can view report photos" on storage.objects;
+create policy "Anyone can view report photos"
   on storage.objects for select
-  to authenticated
+  to anon, authenticated
   using (bucket_id = 'foundit-report-photos');
+grant select on storage.objects to anon, authenticated;
 
 drop policy if exists "Students can upload their own report photos" on storage.objects;
 create policy "Students can upload their own report photos"
