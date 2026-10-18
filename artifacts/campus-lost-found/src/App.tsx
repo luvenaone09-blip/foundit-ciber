@@ -1,4 +1,4 @@
-import { type ChangeEvent, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ChangeEvent, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type User } from '@supabase/supabase-js';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -17,6 +17,7 @@ import {
   Clock3,
   Compass,
   ImagePlus,
+  LogOut,
   Mail,
   MapPin,
   Pencil,
@@ -25,6 +26,7 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  UserRound,
   X,
 } from 'lucide-react';
 import {
@@ -283,7 +285,15 @@ function errorText(error: unknown) {
   return 'Unknown error';
 }
 
-function Home({ user }: { user: User }) {
+function Home({
+  user,
+  authOpen,
+  setAuthOpen,
+}: {
+  user: User;
+  authOpen: boolean;
+  setAuthOpen: (open: boolean) => void;
+}) {
   const [reports, setReports] = useState<Report[]>([]);
   const [kindFilter, setKindFilter] = useState<'all' | ReportKind>('all');
   const [statusFilter, setStatusFilter] = useState<'open' | 'all' | 'reunited'>('open');
@@ -630,11 +640,7 @@ function Home({ user }: { user: User }) {
         </a>
         <div className="nav-right">
           <span className="local-note"><ShieldCheck size={15} /> {realtimeStatus === 'connected' ? 'Live reports synced' : realtimeStatus === 'connecting' ? 'Connecting to live reports…' : 'Live sync unavailable'}</span>
-          <span className="signed-in-email">{user.email}</span>
-          <button className="button-outline button-signout" onClick={async () => {
-            const { error } = await supabase.auth.signOut();
-            if (error) setToast(`Could not sign out: ${error.message}`);
-          }} data-testid="button-sign-out">Sign out</button>
+          <AuthPopover user={user} open={authOpen} setOpen={setAuthOpen} />
           <button className="button-primary" onClick={openCreateForm} data-testid="button-create-report">
             <Plus size={16} /> Post a report
           </button>
@@ -904,6 +910,7 @@ function AuthGate() {
   const [session, setSession] = useState<Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session']>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [authError, setAuthError] = useState('');
+  const [authOpen, setAuthOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -933,17 +940,115 @@ function AuthGate() {
     return <main className="auth-page"><div className="auth-card auth-loading" role="status">Checking your Foundit account…</div></main>;
   }
   return session
-    ? <Home user={session.user} />
-    : <AuthScreen initialError={authError} />;
+    ? <Home user={session.user} authOpen={authOpen} setAuthOpen={setAuthOpen} />
+    : <GuestHome authError={authError} authOpen={authOpen} setAuthOpen={setAuthOpen} />;
 }
 
-function AuthScreen({ initialError }: { initialError: string }) {
+function GuestHome({
+  authError,
+  authOpen,
+  setAuthOpen,
+}: {
+  authError: string;
+  authOpen: boolean;
+  setAuthOpen: (open: boolean) => void;
+}) {
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <a className="brand" href="/" aria-label="Foundit home">
+          <span className="brand-mark"><Compass size={21} strokeWidth={1.8} /></span>
+          <span><span className="brand-name">Foundit</span><span className="brand-sub">Ciber school lost &amp; found</span></span>
+        </a>
+        <div className="nav-right">
+          <span className="local-note"><ShieldCheck size={15} /> Shared across your devices</span>
+          <AuthPopover
+            initialError={authError}
+            open={authOpen}
+            setOpen={setAuthOpen}
+          />
+        </div>
+      </header>
+
+      <section className="hero" aria-labelledby="hero-title">
+        <div className="hero-copy-wrap">
+          <div className="eyebrow">Look out for each other</div>
+          <h1 id="hero-title">Lost something?<br />Let’s bring it <em>home.</em></h1>
+          <p className="hero-copy">A clear, kind place for Ciber students to post things that go missing between classes and the walk home.</p>
+        </div>
+        <aside className="hero-aside" aria-label="How the Ciber school bulletin works">
+          <div className="aside-kicker">The Ciber school bulletin</div>
+          <h2>Small things find their way back.</h2>
+          <p>Share the details. Reach out directly. Close the loop when you’re reunited.</p>
+          <BadgeCheck className="aside-spark" size={29} strokeWidth={1.4} />
+        </aside>
+      </section>
+
+      <section className="board-wrap guest-board-wrap">
+        <div className="board guest-board">
+          <div className="eyebrow">Around Ciber</div>
+          <h2>Find your way back to what matters.</h2>
+          <p>Sign in to browse shared lost-and-found reports, post an item, or reconnect with its owner. Your reports stay in sync when you switch between your phone, laptop, and tablet.</p>
+          <button className="button-primary" type="button" onClick={() => setAuthOpen(true)}>
+            <UserRound size={16} /> Masuk / Daftar
+          </button>
+        </div>
+      </section>
+      <footer className="footer">
+        <span>Made for the Ciber school community.</span>
+        <strong>Foundit · Lost &amp; found</strong>
+      </footer>
+    </main>
+  );
+}
+
+function AuthPopover({
+  user,
+  initialError = '',
+  open,
+  setOpen,
+}: {
+  user?: User | null;
+  initialError?: string;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
   const [mode, setMode] = useState<'sign-in' | 'sign-up'>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState(initialError);
   const [message, setMessage] = useState('');
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !popoverRef.current?.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, setOpen]);
+
+  useEffect(() => {
+    if (!user) return;
+    setOpen(false);
+    setError('');
+    setMessage('');
+  }, [user, setOpen]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -960,9 +1065,9 @@ function AuthScreen({ initialError }: { initialError: string }) {
         });
         if (signUpError) throw signUpError;
         if (data.session) {
-          setMessage('Your account is ready. You are signed in.');
+          setOpen(false);
         } else {
-          setMessage('Account created. Check your email to confirm your address, then sign in.');
+          setMessage('Supabase still requires email confirmation. Turn off “Confirm email” in Supabase Authentication settings for instant sign-in.');
         }
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
@@ -978,6 +1083,13 @@ function AuthScreen({ initialError }: { initialError: string }) {
     }
   }
 
+  async function signOut() {
+    setError('');
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) setError(`Could not sign out: ${signOutError.message}`);
+    else setOpen(false);
+  }
+
   function changeMode(nextMode: 'sign-in' | 'sign-up') {
     setMode(nextMode);
     setError('');
@@ -985,40 +1097,84 @@ function AuthScreen({ initialError }: { initialError: string }) {
   }
 
   return (
-    <main className="auth-page">
-      <section className="auth-card" aria-labelledby="auth-title">
-        <a className="brand auth-brand" href="/" aria-label="Foundit home">
-          <span className="brand-mark"><Compass size={21} strokeWidth={1.8} /></span>
-          <span><span className="brand-name">Foundit</span><span className="brand-sub">Ciber school lost &amp; found</span></span>
-        </a>
-        <div className="eyebrow">Ciber student access</div>
-        <h1 id="auth-title" className="auth-title">{mode === 'sign-in' ? 'Welcome back.' : 'Join the bulletin.'}</h1>
-        <p className="auth-copy">Sign in to share lost-and-found reports with Ciber students on every device.</p>
+    <div className="auth-popover-wrap" ref={popoverRef}>
+      <button
+        ref={triggerRef}
+        className={user ? 'account-trigger' : 'button-primary auth-trigger'}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="foundit-auth-popover"
+        onClick={() => setOpen(!open)}
+        data-testid={user ? 'button-account-menu' : 'button-open-auth'}
+      >
+        {user ? (
+          <>
+            <span className="account-avatar">{(user.email?.[0] ?? 'S').toUpperCase()}</span>
+            <span className="account-trigger-label">Account</span>
+            <ChevronDown size={14} />
+          </>
+        ) : (
+          <>Masuk / Daftar <ChevronDown size={15} /></>
+        )}
+      </button>
 
-        <div className="auth-tabs" role="tablist" aria-label="Account access">
-          <button type="button" role="tab" aria-selected={mode === 'sign-in'} className={mode === 'sign-in' ? 'active' : ''} onClick={() => changeMode('sign-in')} data-testid="tab-sign-in">Sign in</button>
-          <button type="button" role="tab" aria-selected={mode === 'sign-up'} className={mode === 'sign-up' ? 'active' : ''} onClick={() => changeMode('sign-up')} data-testid="tab-sign-up">Create account</button>
-        </div>
-
-        <form className="auth-form" onSubmit={submit} data-testid="form-auth">
-          <label className="auth-field">
-            <span>Email address</span>
-            <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} data-testid="input-auth-email" />
-          </label>
-          <label className="auth-field">
-            <span>Password</span>
-            <input type="password" autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} maxLength={72} data-testid="input-auth-password" />
-            {mode === 'sign-up' && <small>Use at least 6 characters.</small>}
-          </label>
-          {error && <p className="auth-alert error" role="alert" data-testid="error-auth">{error}</p>}
-          {message && <p className="auth-alert success" role="status" data-testid="status-auth">{message}</p>}
-          <button className="button-primary auth-submit" type="submit" disabled={isSubmitting} data-testid="button-auth-submit">
-            {isSubmitting ? 'Please wait…' : mode === 'sign-in' ? 'Sign in to Foundit' : 'Create student account'}
-          </button>
-        </form>
-        <p className="auth-footnote"><ShieldCheck size={14} /> Only signed-in accounts can view shared reports.</p>
-      </section>
-    </main>
+      {open && (
+        <section
+          id="foundit-auth-popover"
+          className={`auth-popover${user ? ' profile-popover' : ''}`}
+          role="dialog"
+          aria-label={user ? 'Account menu' : 'Sign in or create an account'}
+          data-testid="popover-auth"
+        >
+          {user ? (
+            <>
+              <div className="profile-popover-heading">
+                <span className="account-avatar profile-avatar">{(user.email?.[0] ?? 'S').toUpperCase()}</span>
+                <div className="profile-account-copy">
+                  <strong>Akun Foundit</strong>
+                  <span>{user.email ?? 'Student account'}</span>
+                </div>
+              </div>
+              <div className="account-status"><span className="account-status-dot" /> Akun aktif</div>
+              {error && <p className="auth-alert error" role="alert">{error}</p>}
+              <button className="button-outline profile-signout" type="button" onClick={() => void signOut()} data-testid="button-sign-out">
+                <LogOut size={15} /> Keluar (Sign Out)
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="popover-heading">
+                <div className="eyebrow">Ciber student access</div>
+                <h2>{mode === 'sign-in' ? 'Welcome back.' : 'Join the bulletin.'}</h2>
+                <p>Sign in once to keep your reports in sync across devices.</p>
+              </div>
+              <div className="auth-tabs" role="tablist" aria-label="Account access">
+                <button type="button" role="tab" aria-selected={mode === 'sign-in'} className={mode === 'sign-in' ? 'active' : ''} onClick={() => changeMode('sign-in')} data-testid="tab-sign-in">Masuk</button>
+                <button type="button" role="tab" aria-selected={mode === 'sign-up'} className={mode === 'sign-up' ? 'active' : ''} onClick={() => changeMode('sign-up')} data-testid="tab-sign-up">Daftar</button>
+              </div>
+              <form className="auth-form" onSubmit={submit} data-testid="form-auth">
+                <label className="auth-field">
+                  <span>Email</span>
+                  <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} data-testid="input-auth-email" />
+                </label>
+                <label className="auth-field">
+                  <span>Password</span>
+                  <input type="password" autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} maxLength={72} data-testid="input-auth-password" />
+                  {mode === 'sign-up' && <small>Gunakan minimal 6 karakter.</small>}
+                </label>
+                {error && <p className="auth-alert error" role="alert" data-testid="error-auth">{error}</p>}
+                {message && <p className="auth-alert success" role="status" data-testid="status-auth">{message}</p>}
+                <button className="button-primary auth-submit" type="submit" disabled={isSubmitting} data-testid="button-auth-submit">
+                  {isSubmitting ? 'Mohon tunggu…' : mode === 'sign-in' ? 'Masuk ke Foundit' : 'Buat akun siswa'}
+                </button>
+              </form>
+              <p className="auth-footnote"><ShieldCheck size={14} /> Data laporan bersama hanya tersedia setelah masuk.</p>
+            </>
+          )}
+        </section>
+      )}
+    </div>
   );
 }
 
