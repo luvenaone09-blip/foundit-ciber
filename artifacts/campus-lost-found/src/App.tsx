@@ -905,7 +905,7 @@ function Home({
                   {selectedContact.label} <ArrowRight size={14} />
                 </a>
               )}
-              {user && selectedReport.ownerId === user.id && (
+              {user && (selectedReport.ownerId === user.id || user.email === ADMIN_EMAIL) && (
                 <>
                   <button className="button-outline" disabled={isMutatingReport} onClick={() => openEditForm(selectedReport)} data-testid={`button-edit-report-${selectedReport.id}`}>
                     <Pencil size={14} /> Edit report
