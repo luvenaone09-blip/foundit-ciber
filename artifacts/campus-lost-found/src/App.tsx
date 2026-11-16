@@ -58,7 +58,8 @@ interface Report {
 }
 
 const STORAGE_KEY = 'campus-lost-found-reports-v1';
-const OWNER_STORAGE_KEY = 'foundit-browser-owner-v1';
+const OWNER_STORAGE_KEY = 'foundit-browser-owner-v1'; 
+const ADMIN_EMAIL = 'gechine.gunawan@student.citraberkat.sch.id';
 const MIGRATION_KEY = 'foundit-supabase-migration-v1';
 const PHOTO_BUCKET = 'foundit-report-photos';
 const categories = ['Accessories', 'Bags', 'Books & notes', 'Clothing', 'Electronics', 'Keys & cards', 'Other'];
@@ -609,7 +610,8 @@ function Home({
 
   async function deleteReport(report: Report) {
     if (!user) return;
-    if (report.ownerId !== user.id || isMutatingReport) return;
+    const isAdmin = user.email === ADMIN_EMAIL;
+    if ((!isAdmin && report.ownerId !== user.id) || isMutatingReport) return;
     const confirmed = window.confirm(`Delete "${report.itemName}"? This will permanently remove it from the shared Ciber platform.`);
     if (!confirmed) return;
     setIsMutatingReport(true);
