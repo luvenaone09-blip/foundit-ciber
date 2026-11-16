@@ -616,13 +616,11 @@ function Home({
     if (!confirmed) return;
     setIsMutatingReport(true);
     try {
-      const { data, error } = await supabase
-        .from('reports')
-        .delete()
-        .eq('id', report.id)
-        .eq('owner_id', user.id)
-        .select('id')
-        .maybeSingle();
+          let deleteQuery = supabase.from('reports').delete().eq('id', report.id);
+    if (!isAdmin) {
+      deleteQuery = deleteQuery.eq('owner_id', user.id);
+    }
+    const { data, error } = await deleteQuery.select('id').maybeSingle();
       if (error) throw error;
       if (!data) throw new Error('This report no longer exists or is not yours to delete.');
       let photoCleanupFailed = false;
