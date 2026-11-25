@@ -672,7 +672,7 @@ function Home({
       <section className="hero" aria-labelledby="hero-title">
         <div className="hero-copy-wrap">
           <div className="eyebrow">Look out for each other</div>
-          <h1 id="hero-title">Lost something?<br />Let’s bring it <em>home.</em></h1>
+          <h1 id="hero-title">Kehilangan sesuatu?<br />Let’s bring it <em>home.</em></h1>
           <p className="hero-copy">A clear, kind place for Ciber students to post things that go missing between classes and the walk home.</p>
         </div>
         <aside className="hero-aside" aria-label="How the Ciber school platform works">
