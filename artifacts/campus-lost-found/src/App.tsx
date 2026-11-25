@@ -686,7 +686,7 @@ function Home({
       <section className="board-wrap" aria-labelledby="board-title">
         <div className="board">
           <div className="board-heading">
-            <div>
+            <div><span className="w-2 h-2 bg-teal-500 rounded-full animate-pulse"></span>
               <div className="eyebrow">Around Ciber</div>
               <h2 id="board-title">The latest reports</h2>
               <p className="board-subtitle">Shared reports from Ciber students · A little more detail can make all the difference.</p>
